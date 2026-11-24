@@ -53,7 +53,8 @@
 <section id="dashboardView" class="hidden">
  <div class="hero"><div><h1 id="welcomeTitle">Dashboard</h1><p id="welcomeText">Orders ko manage karein.</p></div><div class="heroicon" id="welcomeIcon">📦</div></div>
  <div class="grid" id="stats"></div>
- <div class="sectionhead"><h2 id="ordersTitle">Orders</h2><div class="filters" id="filters"></div></div>
+ <div class="sectionhead"><h2 id="ordersTitle">Aaj ke Orders</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button id="todayTab" class="primary" type="button" onclick="setOrderView('today')">Aaj ke Orders</button><button id="pastTab" class="outline" type="button" onclick="setOrderView('past')">Past Orders</button><button id="notifyBtn" class="soft" type="button" onclick="enableNotifications()">🔔 Notifications On</button></div></div>
+ <div class="filters" id="filters"></div>
  <div id="ordersList" class="orders"></div>
  <section class="panel calendarpanel" id="calendarPanel">
   <div class="sectionhead"><h2>📅 Orders Calendar</h2><span class="sub">Date select karke us din ke orders dekhein</span></div>
@@ -61,7 +62,7 @@
   <div class="calgrid" id="calendarGrid"></div>
   <h3 id="calendarSelectedTitle" style="margin:18px 0 8px"></h3><div class="calorders" id="calendarOrders"></div>
  </section>
- <div id="partnerNote" class="hint hidden">Demo mode: status updates sirf isi browser mein rehte hain. Live customer sync, real logins aur order sharing ke liye agle step mein Firebase connect karna hoga.</div>
+ <div id="partnerNote" class="hint hidden">Notifications: browser permission allow karein. Is version mein alert tab milta hai jab website open ho; website band/background mein push notifications ke liye Firebase Cloud Messaging, service worker aur server-side sender setup zaroori hai.</div>
 </section>
 <div class="footer">Tiffin Waala Delivery Partner · Firebase login · Real-time orders · Date-wise order calendar</div>
 </main>
@@ -81,6 +82,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
+auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(console.error);
 const db = firebase.firestore();
 </script>
 <script>
@@ -97,6 +99,10 @@ let currentRole = "";
 let currentUserUid = "";
 let ordersUnsubscribers = [];
 let currentFilter = "All";
+let orderView = "today";
+let notificationPrimed = false;
+let knownOrderIds = new Set();
+let knownOrderData = new Map();
 let selectedCalendarDate = new Date(); selectedCalendarDate.setHours(0,0,0,0);
 let calendarMonth = new Date(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth(), 1);
 const money=n=>"₹"+Number(n).toLocaleString("en-IN");
@@ -135,6 +141,7 @@ async function loadUserProfile(user, username){
   return profile;
 }
 async function openDashboard(role, username, user){
+  if(currentUserUid===user.uid && !document.getElementById("dashboardView").classList.contains("hidden")) return;
   currentRole = role;
   currentUserUid = user.uid;
   ordersUnsubscribers.forEach(unsub=>unsub());ordersUnsubscribers=[];
@@ -152,6 +159,8 @@ async function openDashboard(role, username, user){
   document.getElementById("partnerNote").textContent = "Firebase live sync connected. Naye customer orders yahan real-time mein dikhne chahiye.";
   if(role==="owner"){
     const unsub=db.collection("orders").onSnapshot(snapshot=>{
+      if(notificationPrimed){snapshot.docChanges().forEach(change=>{const now=change.doc.data();const before=knownOrderData.get(change.doc.id);if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya customer order", "Order "+change.doc.id+" aaya hai.");else if(change.type==="modified" && before && before.partner!==now.partner && (now.partner==="delivery" || now.partner==="all")) notifyUser("Order assign/update hua", "Order "+change.doc.id+" ka delivery assignment update hua.");});}
+      snapshot.docs.forEach(doc=>{knownOrderIds.add(doc.id);knownOrderData.set(doc.id,doc.data());});
       orders = snapshot.docs.map(doc=>{const d=doc.data();const itemText=d.itemsText || (Array.isArray(d.items)?d.items.map(x=>(x.qty||1)+" × "+x.name).join(", "):String(d.items||""));const created=d.createdAt&&d.createdAt.toDate?d.createdAt.toDate():d.createdAt?new Date(d.createdAt):null;return {...d,id:doc.id,name:d.customerName||d.name||"Customer",phone:d.phone||"",address:d.address||"",items:itemText,total:Number(d.total||0),status:d.status||"New",time:created?created.toLocaleString("en-IN"):"Just now",payment:d.payment||"Not specified",partner:d.partner||""};}).sort((a,b)=>{const ta=a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0;const tb=b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0;return tb-ta;});
       render();
     },err=>{console.error("Orders live sync error",err);toast("Live sync error: "+(err.code||"unknown")+" — "+(err.message||"Firestore Rules/query check karein"));});
@@ -166,11 +175,12 @@ async function openDashboard(role, username, user){
       render();
     };
     queries.forEach((query,index)=>{
-      const unsub=query.onSnapshot(snapshot=>{sourceMaps[index]=new Map(snapshot.docs.map(doc=>[doc.id,doc]));renderMerged();},err=>{console.error("Partner orders sync error",index,err);toast("Live sync error: "+(err.code||"unknown")+" — "+(err.message||"Firestore Rules/query check karein"));});
+      const unsub=query.onSnapshot(snapshot=>{if(notificationPrimed){snapshot.docChanges().forEach(change=>{if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya order assign hua", "Order "+change.doc.id+" aapke dashboard par aaya hai.");});} snapshot.docs.forEach(doc=>knownOrderIds.add(doc.id)); sourceMaps[index]=new Map(snapshot.docs.map(doc=>[doc.id,doc]));renderMerged();},err=>{console.error("Partner orders sync error",index,err);toast("Live sync error: "+(err.code||"unknown")+" — "+(err.message||"Firestore Rules/query check karein"));});
       ordersUnsubscribers.push(unsub);
     });
   }
   render();
+  setTimeout(()=>{notificationPrimed=true;},2500);
 }
 document.getElementById("signupForm").addEventListener("submit", async e=>{
  e.preventDefault();
@@ -246,7 +256,12 @@ function render(){
  document.getElementById("stats").innerHTML=stats.map(s=>`<div class="stat"><span>${s[0]}</span><strong>${s[1]}</strong></div>`).join("");
  const filters=currentRole==="owner"?["All","New","Confirmed","Out for Delivery","Delivered","Cancelled"]:["All","Confirmed","Out for Delivery","Delivered"];
  document.getElementById("filters").innerHTML=filters.map(f=>`<button class="${currentFilter===f?'active':'outline'}" onclick="setFilter('${f}')">${f}</button>`).join("");
- const filtered=list.filter(o=>currentFilter==="All"||o.status===currentFilter);
+ const todayKey=dateKey(new Date());
+ const dayScoped=list.filter(o=>{const d=orderDate(o);const key=d?dateKey(d):"";return orderView==="today" ? key===todayKey : !!key && key<todayKey;});
+ document.getElementById("ordersTitle").textContent=orderView==="today"?"Aaj ke Orders":"Past Orders";
+ document.getElementById("todayTab").className=orderView==="today"?"primary":"outline";
+ document.getElementById("pastTab").className=orderView==="past"?"primary":"outline";
+ const filtered=dayScoped.filter(o=>currentFilter==="All"||o.status===currentFilter);
  const container=document.getElementById("ordersList");
  if(!filtered.length){container.innerHTML='<div class="empty" style="grid-column:1/-1">Is filter mein abhi koi order nahi hai.</div>';renderCalendar(list);return}
  container.innerHTML=filtered.map(o=>{
@@ -265,6 +280,15 @@ function render(){
  return `<article class="order"><div class="orderhead"><div><h3>${o.id} · ${o.name}</h3><div class="sub">${o.time} · ${o.payment}</div></div><span class="status ${statusClass}">${o.status}</span></div><div class="details"><div class="detailrow"><b>Phone</b><span>${o.phone}</span></div><div class="detailrow"><b>Order</b><span>${o.items}</span></div><div class="detailrow"><b>Address</b><span>${o.address}</span></div><div class="detailrow"><b>Total</b><strong>${money(o.total)}</strong></div>${currentRole==="owner"?`<div class="detailrow"><b>Delivery</b><span>${o.partner?"Assigned to delivery partner":"Not assigned"}</span></div>`:""}</div><div class="mapbox"><div class="pin">📍</div><p><b>Delivery location</b><br>${o.address}<br><button class="soft" style="margin-top:8px;padding:7px 10px" onclick="navigateTo('${o.id}')">Go to ↗</button></p></div><div class="orderactions">${actions}</div></article>`;
  }).join("");
  renderCalendar(list);
+}
+function setOrderView(view){orderView=view;currentFilter="All";render();}
+async function enableNotifications(){
+ if(!("Notification" in window)){toast("Is browser mein notifications supported nahi hain.");return;}
+ try{const permission=await Notification.requestPermission();if(permission==="granted"){toast("Notifications allow ho gaye. Website khuli rehne par naye orders ka alert milega.");document.getElementById("notifyBtn").textContent="🔔 Notifications Enabled";}else toast("Browser settings mein notifications allow karein.");}
+ catch(e){toast("Notification permission nahi mil saki.");}
+}
+function notifyUser(title,body){
+ try{if("Notification" in window && Notification.permission==="granted"){new Notification(title,{body,icon:"https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/firebase-logo.png",tag:title+body});}else toast(title+": "+body);}catch(e){console.warn("Notification unavailable",e);}
 }
 function dateKey(date){if(!(date instanceof Date)||isNaN(date))return "";return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`}
 function orderDate(o){let d=o.createdAt&&o.createdAt.toDate?o.createdAt.toDate():o.createdAt?new Date(o.createdAt):null;if(!d||isNaN(d)){d=o.deliveryDate?new Date(o.deliveryDate):null;}return d&&!isNaN(d)?d:null}
@@ -326,6 +350,16 @@ function navigateTo(id){
  window.open(url,"_blank");
 }
 function showOrder(id){const o=orders.find(x=>x.id===id);if(o)toast(`${o.id}: ${o.name} · ${money(o.total)} · ${o.status}`)}
+// Firebase Auth LOCAL persistence keeps admin signed in after closing/reopening the browser.
+// Restore the existing session automatically; only the Logout button signs the user out.
+auth.onAuthStateChanged(async user=>{
+  if(!user || currentUserUid===user.uid) return;
+  try{
+    const profile=await loadUserProfile(user,(user.email||"").split("@")[0]);
+    if(profile.active===false){await auth.signOut();return;}
+    await openDashboard(profile.role||"partner",profile.username||"",user);
+  }catch(err){console.error("Session restore failed",err);toast("Saved login restore nahi hua: "+(err.code||err.message||"Firebase error"));}
+});
 </script>
 </body>
 </html>
