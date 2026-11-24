@@ -86,15 +86,8 @@ auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(console.error);
 const db = firebase.firestore();
 </script>
 <script>
-// Fixed sample orders are shown for frontend testing only. No new demo orders are auto-added.
-const demoOrders = [
- {id:"TW-1042",name:"Rohit Kumar",phone:"98XXXXXX21",address:"Station Road, near City Hospital, Forbesganj",items:"2 × Regular Veg Tiffin, 1 × Roti",total:280,status:"New",time:"11:32 AM",payment:"Cash on Delivery",partner:""},
- {id:"TW-1041",name:"Pooja Kumari",phone:"97XXXXXX48",address:"Ward No. 12, Main Bazaar, Forbesganj",items:"1 × Chicken Chawal, 2 × Roti",total:160,status:"Confirmed",time:"11:18 AM",payment:"UPI",partner:"delivery"},
- {id:"TW-1040",name:"Amit Singh",phone:"91XXXXXX76",address:"College Road, near SBI ATM, Forbesganj",items:"1 × Special Veg Tiffin",total:130,status:"Out for Delivery",time:"10:56 AM",payment:"Cash on Delivery",partner:"delivery"},
- {id:"TW-1039",name:"Neha Jha",phone:"90XXXXXX13",address:"Hospital Chowk, Forbesganj",items:"2 × Mutton Roti",total:240,status:"Delivered",time:"10:25 AM",payment:"UPI",partner:"delivery"},
- {id:"TW-1038",name:"Vikas Yadav",phone:"99XXXXXX52",address:"Subhash Chowk, Forbesganj",items:"1 × Pav Bhaji, 1 × Burger",total:180,status:"Cancelled",time:"10:02 AM",payment:"Cash on Delivery",partner:""}
-];
-let orders = demoOrders.map(x=>({...x}));
+// Orders are loaded only from Firestore. No hard-coded demo orders.
+let orders = [];
 let currentRole = "";
 let currentUserUid = "";
 let ordersUnsubscribers = [];
@@ -156,10 +149,10 @@ async function openDashboard(role, username, user){
   document.getElementById("welcomeIcon").textContent = role === "owner" ? "📋" : "🛵";
   document.getElementById("ordersTitle").textContent = role === "owner" ? "All Customer Orders" : "Aapke Assigned Orders";
   document.getElementById("partnerNote").classList.remove("hidden");
-  document.getElementById("partnerNote").textContent = "Firebase live sync connected. Naye customer orders yahan real-time mein dikhne chahiye.";
+  document.getElementById("partnerNote").textContent = "Sirf Firestore ke real orders dikhaye ja rahe hain. Admin jis partner ko assign karega, order usi ke account mein aayega.";
   if(role==="owner"){
     const unsub=db.collection("orders").onSnapshot(snapshot=>{
-      if(notificationPrimed){snapshot.docChanges().forEach(change=>{const now=change.doc.data();const before=knownOrderData.get(change.doc.id);if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya customer order", "Order "+change.doc.id+" aaya hai.");else if(change.type==="modified" && before && before.partner!==now.partner && (now.partner==="delivery" || now.partner==="all")) notifyUser("Order assign/update hua", "Order "+change.doc.id+" ka delivery assignment update hua.");});}
+      if(notificationPrimed){snapshot.docChanges().forEach(change=>{const now=change.doc.data();const before=knownOrderData.get(change.doc.id);if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya customer order", "Order "+change.doc.id+" aaya hai.");else if(change.type==="modified" && before && (before.partnerUid!==now.partnerUid || before.partner!==now.partner) && (now.partnerUid || now.partner==="delivery" || now.partner==="all")) notifyUser("Order assign/update hua", "Order "+change.doc.id+" ka delivery assignment update hua.");});}
       snapshot.docs.forEach(doc=>{knownOrderIds.add(doc.id);knownOrderData.set(doc.id,doc.data());});
       orders = snapshot.docs.map(doc=>{const d=doc.data();const itemText=d.itemsText || (Array.isArray(d.items)?d.items.map(x=>(x.qty||1)+" × "+x.name).join(", "):String(d.items||""));const created=d.createdAt&&d.createdAt.toDate?d.createdAt.toDate():d.createdAt?new Date(d.createdAt):null;return {...d,id:doc.id,name:d.customerName||d.name||"Customer",phone:d.phone||"",address:d.address||"",items:itemText,total:Number(d.total||0),status:d.status||"New",time:created?created.toLocaleString("en-IN"):"Just now",payment:d.payment||"Not specified",partner:d.partner||""};}).sort((a,b)=>{const ta=a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0;const tb=b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0;return tb-ta;});
       render();
@@ -167,7 +160,7 @@ async function openDashboard(role, username, user){
     ordersUnsubscribers.push(unsub);
   }else{
     // Partners receive orders shared to all partners, delivery-assigned orders, and UID-specific orders.
-    const queries=[db.collection("orders").where("partner","==","delivery"),db.collection("orders").where("partner","==","all")];
+    const queries=[db.collection("orders").where("partnerUid","==",currentUserUid)];
     const sourceMaps=queries.map(()=>new Map());
     const renderMerged=()=>{
       const merged=new Map();sourceMaps.forEach(m=>m.forEach((doc,id)=>merged.set(id,doc)));
@@ -249,7 +242,7 @@ document.getElementById("loginForm").addEventListener("submit", async e=>{
  }
 });
 async function logout(){ordersUnsubscribers.forEach(unsub=>unsub());ordersUnsubscribers=[];try{await auth.signOut()}catch(e){console.error(e)}currentUserUid="";currentRole="";document.getElementById("dashboardView").classList.add("hidden");document.getElementById("signupView").classList.add("hidden");document.getElementById("loginView").classList.remove("hidden");document.getElementById("logoutBtn").classList.add("hidden");document.getElementById("rolePill").textContent="Firebase Login";document.getElementById("username").value="";document.getElementById("password").value=""}
-function visibleOrders(){return currentRole==="owner"?orders:orders.filter(o=>o.partner==="delivery" || o.partner==="all" || o.partnerUid===currentUserUid)}
+function visibleOrders(){return currentRole==="owner"?orders:orders.filter(o=>o.partnerUid===currentUserUid)}
 function render(){
  const list=visibleOrders();const active=list.filter(o=>!["Delivered","Cancelled"].includes(o.status)).length;const delivered=list.filter(o=>o.status==="Delivered").length;const total=list.reduce((s,o)=>s+o.total,0);
  const stats=currentRole==="owner"?[["Total Orders",orders.length],["Needs Action",orders.filter(o=>o.status==="New").length],["On Delivery",orders.filter(o=>o.status==="Out for Delivery").length],["Delivered",orders.filter(o=>o.status==="Delivered").length]]:[["Assigned Orders",list.length],["Active Deliveries",active],["Delivered",delivered],["Order Value",money(total)]];
@@ -284,7 +277,7 @@ function render(){
 function setOrderView(view){orderView=view;currentFilter="All";render();}
 async function enableNotifications(){
  if(!("Notification" in window)){toast("Is browser mein notifications supported nahi hain.");return;}
- try{const permission=await Notification.requestPermission();if(permission==="granted"){toast("Notifications allow ho gaye. Website khuli rehne par naye orders ka alert milega.");document.getElementById("notifyBtn").textContent="🔔 Notifications Enabled";}else toast("Browser settings mein notifications allow karein.");}
+ try{const permission=await Notification.requestPermission();if(permission==="granted"){toast("Notifications allow ho gaye. Dashboard khula rehne par naye orders/assignments ka alert milega.");document.getElementById("notifyBtn").textContent="🔔 Notifications Enabled";}else toast("Browser settings mein notifications allow karein.");}
  catch(e){toast("Notification permission nahi mil saki.");}
 }
 function notifyUser(title,body){
@@ -319,11 +312,28 @@ function renderCalendar(list){
 }
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));}
 function setFilter(f){currentFilter=f;render()}
-function changeStatus(id,status){const o=orders.find(x=>x.id===id);if(!o)return;o.status=status;if(status==="Confirmed")toast(id+" confirmed (demo)");else if(status==="Cancelled")toast(id+" cancelled (demo)");else toast(id+" status: "+status+" (demo)");render()}
-function assignPartner(id){const o=orders.find(x=>x.id===id);if(!o)return;o.partner="delivery";o.status="Confirmed";toast(id+" demo delivery partner ko assign hua.");render()}
-function pickupOrder(id){
+async function changeStatus(id,status){
  const o=orders.find(x=>x.id===id);if(!o)return;
- o.status="Out for Delivery";
+ try{await db.collection("orders").doc(id).update({status,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});toast(id+" status Firebase mein save ho gaya.");}
+ catch(e){console.error(e);toast("Status save nahi hua: "+(e.code||e.message));}
+}
+async function assignPartner(id){
+ try{
+  const snap=await db.collection("users").where("role","==","partner").where("active","==",true).get();
+  const partners=snap.docs.map(d=>({uid:d.id,...d.data()}));
+  if(!partners.length){toast("Koi active delivery partner nahi mila.");return;}
+  const choices=partners.map((p,i)=>`${i+1}. ${p.username||p.phone||p.uid}`).join("\n");
+  const answer=prompt("Kis delivery partner ko assign karein? Number likhein:\n"+choices);
+  if(answer===null)return;
+  const chosen=partners[Number(answer)-1];if(!chosen){toast("Sahi partner number chunein.");return;}
+  await db.collection("orders").doc(id).update({partnerUid:chosen.uid,partner:chosen.uid,partnerUsername:chosen.username||"",status:"Confirmed",assignedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+  toast(id+" selected partner ko assign ho gaya.");
+ }catch(e){console.error(e);toast("Assign nahi hua: "+(e.code||e.message)+". Firestore Rules check karein.");}
+}
+async function pickupOrder(id){
+ const o=orders.find(x=>x.id===id);if(!o)return;
+ try{await db.collection("orders").doc(id).update({status:"Out for Delivery",pickedUpAt:firebase.firestore.FieldValue.serverTimestamp(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});}
+ catch(e){console.error(e);toast("Pickup status save nahi hua: "+(e.code||e.message));return;}
  render();
  const message=`Namaste ${o.name}, aapka Tiffin Waala order ${o.id} delivery ke liye nikal chuka hai. Aapke address tak pahunchne ka samay route aur traffic ke hisaab se hoga. Dhanyavaad!`;
  const phone=(o.phone||"").replace(/[^0-9+]/g,"");
