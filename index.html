@@ -86,7 +86,7 @@ auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(console.error);
 const db = firebase.firestore();
 </script>
 <script>
-// Orders are loaded only from Firestore. No hard-coded demo orders.
+// Orders are loaded only from Firestore. No sample/demo orders are injected.
 let orders = [];
 let currentRole = "";
 let currentUserUid = "";
@@ -149,28 +149,32 @@ async function openDashboard(role, username, user){
   document.getElementById("welcomeIcon").textContent = role === "owner" ? "📋" : "🛵";
   document.getElementById("ordersTitle").textContent = role === "owner" ? "All Customer Orders" : "Aapke Assigned Orders";
   document.getElementById("partnerNote").classList.remove("hidden");
-  document.getElementById("partnerNote").textContent = "Sirf Firestore ke real orders dikhaye ja rahe hain. Admin jis partner ko assign karega, order usi ke account mein aayega.";
+  document.getElementById("partnerNote").textContent = "Firebase live sync connected. Naye customer orders yahan real-time mein dikhne chahiye.";
   if(role==="owner"){
     const unsub=db.collection("orders").onSnapshot(snapshot=>{
-      if(notificationPrimed){snapshot.docChanges().forEach(change=>{const now=change.doc.data();const before=knownOrderData.get(change.doc.id);if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya customer order", "Order "+change.doc.id+" aaya hai.");else if(change.type==="modified" && before && (before.partnerUid!==now.partnerUid || before.partner!==now.partner) && (now.partnerUid || now.partner==="delivery" || now.partner==="all")) notifyUser("Order assign/update hua", "Order "+change.doc.id+" ka delivery assignment update hua.");});}
+      if(notificationPrimed){snapshot.docChanges().forEach(change=>{const now=change.doc.data();const before=knownOrderData.get(change.doc.id);if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya customer order", "Order "+change.doc.id+" aaya hai.");else if(change.type==="modified" && before && before.partnerUid!==now.partnerUid && !!now.partnerUid) notifyUser("Order assign/update hua", "Order "+change.doc.id+" ka delivery assignment update hua.");});}
       snapshot.docs.forEach(doc=>{knownOrderIds.add(doc.id);knownOrderData.set(doc.id,doc.data());});
       orders = snapshot.docs.map(doc=>{const d=doc.data();const itemText=d.itemsText || (Array.isArray(d.items)?d.items.map(x=>(x.qty||1)+" × "+x.name).join(", "):String(d.items||""));const created=d.createdAt&&d.createdAt.toDate?d.createdAt.toDate():d.createdAt?new Date(d.createdAt):null;return {...d,id:doc.id,name:d.customerName||d.name||"Customer",phone:d.phone||"",address:d.address||"",items:itemText,total:Number(d.total||0),status:d.status||"New",time:created?created.toLocaleString("en-IN"):"Just now",payment:d.payment||"Not specified",partner:d.partner||""};}).sort((a,b)=>{const ta=a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0;const tb=b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0;return tb-ta;});
       render();
     },err=>{console.error("Orders live sync error",err);toast("Live sync error: "+(err.code||"unknown")+" — "+(err.message||"Firestore Rules/query check karein"));});
     ordersUnsubscribers.push(unsub);
   }else{
-    // Partners receive orders shared to all partners, delivery-assigned orders, and UID-specific orders.
-    const queries=[db.collection("orders").where("partnerUid","==",currentUserUid)];
-    const sourceMaps=queries.map(()=>new Map());
-    const renderMerged=()=>{
-      const merged=new Map();sourceMaps.forEach(m=>m.forEach((doc,id)=>merged.set(id,doc)));
-      orders=[...merged.values()].map(doc=>{const d=doc.data();const itemText=d.itemsText || (Array.isArray(d.items)?d.items.map(x=>(x.qty||1)+" × "+x.name).join(", "):String(d.items||""));const created=d.createdAt&&d.createdAt.toDate?d.createdAt.toDate():d.createdAt?new Date(d.createdAt):null;return {...d,id:doc.id,name:d.customerName||d.name||"Customer",phone:d.phone||"",address:d.address||"",items:itemText,total:Number(d.total||0),status:d.status||"New",time:created?created.toLocaleString("en-IN"):"Just now",payment:d.payment||"Not specified",partner:d.partner||""};}).sort((a,b)=>{const ta=a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0;const tb=b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0;return tb-ta;});
+    // A partner can only query orders assigned to their authenticated Firebase UID.
+    const query=db.collection("orders").where("partnerUid","==",currentUserUid);
+    const unsub=query.onSnapshot(snapshot=>{
+      if(notificationPrimed){snapshot.docChanges().forEach(change=>{
+        if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya order assign hua", "Order "+change.doc.id+" aapko assign hua hai.");
+      });}
+      snapshot.docs.forEach(doc=>knownOrderIds.add(doc.id));
+      orders=snapshot.docs.map(doc=>{
+        const d=doc.data();
+        const itemText=d.itemsText || (Array.isArray(d.items)?d.items.map(x=>(x.qty||1)+" × "+x.name).join(", "):String(d.items||""));
+        const created=d.createdAt&&d.createdAt.toDate?d.createdAt.toDate():d.createdAt?new Date(d.createdAt):null;
+        return {...d,id:doc.id,name:d.customerName||d.name||"Customer",phone:d.phone||"",address:d.address||"",items:itemText,total:Number(d.total||0),status:d.status||"New",time:created?created.toLocaleString("en-IN"):"Just now",payment:d.payment||"Not specified",partner:d.partner||""};
+      }).sort((a,b)=>{const ta=a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0;const tb=b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0;return tb-ta;});
       render();
-    };
-    queries.forEach((query,index)=>{
-      const unsub=query.onSnapshot(snapshot=>{if(notificationPrimed){snapshot.docChanges().forEach(change=>{if(change.type==="added" && !knownOrderIds.has(change.doc.id)) notifyUser("Naya order assign hua", "Order "+change.doc.id+" aapke dashboard par aaya hai.");});} snapshot.docs.forEach(doc=>knownOrderIds.add(doc.id)); sourceMaps[index]=new Map(snapshot.docs.map(doc=>[doc.id,doc]));renderMerged();},err=>{console.error("Partner orders sync error",index,err);toast("Live sync error: "+(err.code||"unknown")+" — "+(err.message||"Firestore Rules/query check karein"));});
-      ordersUnsubscribers.push(unsub);
-    });
+    },err=>{console.error("Partner orders sync error",err);toast("Partner orders load nahi hue: "+(err.code||"unknown")+" — Firestore Rules mein partnerUid query allow karein.");});
+    ordersUnsubscribers.push(unsub);
   }
   render();
   setTimeout(()=>{notificationPrimed=true;},2500);
@@ -270,14 +274,14 @@ function render(){
   if(o.status==="Out for Delivery")actions+=`<button class="outline" onclick="callCustomer('${o.id}')">📞 Call Customer</button><button class="primary" onclick="changeStatus('${o.id}','Delivered')">✓ Delivered</button>`;
   actions+=`<button class="outline" onclick="navigateTo('${o.id}')">🧭 Go to</button>`;
  }
- return `<article class="order"><div class="orderhead"><div><h3>${o.id} · ${o.name}</h3><div class="sub">${o.time} · ${o.payment}</div></div><span class="status ${statusClass}">${o.status}</span></div><div class="details"><div class="detailrow"><b>Phone</b><span>${o.phone}</span></div><div class="detailrow"><b>Order</b><span>${o.items}</span></div><div class="detailrow"><b>Address</b><span>${o.address}</span></div><div class="detailrow"><b>Total</b><strong>${money(o.total)}</strong></div>${currentRole==="owner"?`<div class="detailrow"><b>Delivery</b><span>${o.partner?"Assigned to delivery partner":"Not assigned"}</span></div>`:""}</div><div class="mapbox"><div class="pin">📍</div><p><b>Delivery location</b><br>${o.address}<br><button class="soft" style="margin-top:8px;padding:7px 10px" onclick="navigateTo('${o.id}')">Go to ↗</button></p></div><div class="orderactions">${actions}</div></article>`;
+ return `<article class="order"><div class="orderhead"><div><h3>${o.id} · ${o.name}</h3><div class="sub">${o.time} · ${o.payment}</div></div><span class="status ${statusClass}">${o.status}</span></div><div class="details"><div class="detailrow"><b>Phone</b><span>${o.phone}</span></div><div class="detailrow"><b>Order</b><span>${o.items}</span></div><div class="detailrow"><b>Address</b><span>${o.address}</span></div><div class="detailrow"><b>Total</b><strong>${money(o.total)}</strong></div>${currentRole==="owner"?`<div class="detailrow"><b>Delivery</b><span>${o.partnerUid?"Assigned to "+(o.partnerName||"delivery partner"):"Not assigned"}</span></div>`:""}</div><div class="mapbox"><div class="pin">📍</div><p><b>Delivery location</b><br>${o.address}<br><button class="soft" style="margin-top:8px;padding:7px 10px" onclick="navigateTo('${o.id}')">Go to ↗</button></p></div><div class="orderactions">${actions}</div></article>`;
  }).join("");
  renderCalendar(list);
 }
 function setOrderView(view){orderView=view;currentFilter="All";render();}
 async function enableNotifications(){
  if(!("Notification" in window)){toast("Is browser mein notifications supported nahi hain.");return;}
- try{const permission=await Notification.requestPermission();if(permission==="granted"){toast("Notifications allow ho gaye. Dashboard khula rehne par naye orders/assignments ka alert milega.");document.getElementById("notifyBtn").textContent="🔔 Notifications Enabled";}else toast("Browser settings mein notifications allow karein.");}
+ try{const permission=await Notification.requestPermission();if(permission==="granted"){toast("Notifications allow ho gaye. Website khuli rehne par naye orders ka alert milega.");document.getElementById("notifyBtn").textContent="🔔 Notifications Enabled";}else toast("Browser settings mein notifications allow karein.");}
  catch(e){toast("Notification permission nahi mil saki.");}
 }
 function notifyUser(title,body){
@@ -314,41 +318,52 @@ function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,ch=>({"&"
 function setFilter(f){currentFilter=f;render()}
 async function changeStatus(id,status){
  const o=orders.find(x=>x.id===id);if(!o)return;
- try{await db.collection("orders").doc(id).update({status,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});toast(id+" status Firebase mein save ho gaya.");}
- catch(e){console.error(e);toast("Status save nahi hua: "+(e.code||e.message));}
+ try{
+   await db.collection("orders").doc(id).update({status:status,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+   toast(id+" status updated: "+status);
+ }catch(err){console.error("Status update failed",err);toast("Status save nahi hua: "+(err.code||err.message||"Firestore Rules check karein"));}
 }
 async function assignPartner(id){
+ const o=orders.find(x=>x.id===id);if(!o)return;
  try{
-  const snap=await db.collection("users").where("role","==","partner").where("active","==",true).get();
-  const partners=snap.docs.map(d=>({uid:d.id,...d.data()}));
-  if(!partners.length){toast("Koi active delivery partner nahi mila.");return;}
-  const choices=partners.map((p,i)=>`${i+1}. ${p.username||p.phone||p.uid}`).join("\n");
-  const answer=prompt("Kis delivery partner ko assign karein? Number likhein:\n"+choices);
-  if(answer===null)return;
-  const chosen=partners[Number(answer)-1];if(!chosen){toast("Sahi partner number chunein.");return;}
-  await db.collection("orders").doc(id).update({partnerUid:chosen.uid,partner:chosen.uid,partnerUsername:chosen.username||"",status:"Confirmed",assignedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
-  toast(id+" selected partner ko assign ho gaya.");
- }catch(e){console.error(e);toast("Assign nahi hua: "+(e.code||e.message)+". Firestore Rules check karein.");}
+   // Read registered partner profiles; filter active partner accounts.
+   const snap=await db.collection("users").get();
+   const partners=snap.docs.map(doc=>({uid:doc.id,...doc.data()})).filter(u=>u.role==="partner" && u.active!==false);
+   if(!partners.length){toast("Koi active registered Delivery Partner nahi mila.");return;}
+   const choices=partners.map((u,i)=>`${i+1}. ${u.username||u.name||"Partner"} · ${u.phone||"Phone unavailable"}`).join("\n");
+   const answer=prompt("Is order ko kis Delivery Partner ko assign karna hai? Number likhein:\n\n"+choices);
+   if(answer===null)return;
+   const index=Number(answer)-1;
+   if(!Number.isInteger(index)||index<0||index>=partners.length){toast("Galat partner number.");return;}
+   const selected=partners[index];
+   await db.collection("orders").doc(id).update({
+     partnerUid:selected.uid,
+     partnerName:selected.username||selected.name||"Delivery Partner",
+     partner:"assigned",
+     status:"Confirmed",
+     assignedAt:firebase.firestore.FieldValue.serverTimestamp(),
+     updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+   });
+   toast(id+" "+(selected.username||"Delivery Partner")+" ko assign ho gaya.");
+ }catch(err){console.error("Partner assignment failed",err);toast("Assign nahi hua: "+(err.code||err.message||"Firestore Rules check karein"));}
 }
 async function pickupOrder(id){
  const o=orders.find(x=>x.id===id);if(!o)return;
- try{await db.collection("orders").doc(id).update({status:"Out for Delivery",pickedUpAt:firebase.firestore.FieldValue.serverTimestamp(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});}
- catch(e){console.error(e);toast("Pickup status save nahi hua: "+(e.code||e.message));return;}
- render();
+ await changeStatus(id,"Out for Delivery");
  const message=`Namaste ${o.name}, aapka Tiffin Waala order ${o.id} delivery ke liye nikal chuka hai. Aapke address tak pahunchne ka samay route aur traffic ke hisaab se hoga. Dhanyavaad!`;
  const phone=(o.phone||"").replace(/[^0-9+]/g,"");
  if(phone && !phone.includes("X") && phone.length>=10){
    window.location.href=`sms:${phone}?body=${encodeURIComponent(message)}`;
    toast("Pickup mark ho gaya; customer SMS draft khul raha hai.");
  }else{
-   toast("Pickup mark ho gaya. Demo number masked hai; real SMS ke liye Firebase se customer phone connect karna hoga.");
+   toast("Pickup status save ho gaya, lekin customer phone number available nahi hai.");
  }
 }
 function callCustomer(id){
  const o=orders.find(x=>x.id===id);if(!o)return;
  const phone=(o.phone||"").replace(/[^0-9+]/g,"");
  if(!phone || phone.includes("X") || phone.length<10){
-   toast("Is demo order ka number masked hai. Real order aate hi customer ke number par call kholne ke liye number chahiye.");
+   toast("Is order mein valid customer phone number available nahi hai.");
    return;
  }
  // Opens the phone dialer with the customer's real number. The delivery partner's phone app places the call after confirmation.
