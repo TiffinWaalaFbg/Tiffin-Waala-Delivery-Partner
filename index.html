@@ -271,7 +271,7 @@ function render(){
   if(!["Delivered","Cancelled"].includes(o.status))actions+=`<button class="outline" onclick="showOrder('${o.id}')">Order details</button>`;
  }else{
   if(o.status==="Confirmed")actions+=`<button class="primary" onclick="pickupOrder('${o.id}')">📦 Pick-up</button>`;
-  if(o.status==="Out for Delivery")actions+=`<button class="outline" onclick="callCustomer('${o.id}')">📞 Call Customer</button><button class="primary" onclick="changeStatus('${o.id}','Delivered')">✓ Delivered</button>`;
+  if(o.status==="Out for Delivery")actions+=`<button class="outline" onclick="callCustomer('${o.id}')">📞 Call Customer</button><button class="soft" onclick="messageCustomer('${o.id}')">💬 Message Customer</button><button class="primary" onclick="changeStatus('${o.id}','Delivered')">✓ Delivered</button>`;
   actions+=`<button class="outline" onclick="navigateTo('${o.id}')">🧭 Go to</button>`;
  }
  return `<article class="order"><div class="orderhead"><div><h3>${o.id} · ${o.name}</h3><div class="sub">${o.time} · ${o.payment}</div></div><span class="status ${statusClass}">${o.status}</span></div><div class="details"><div class="detailrow"><b>Phone</b><span>${o.phone}</span></div><div class="detailrow"><b>Order</b><span>${o.items}</span></div><div class="detailrow"><b>Address</b><span>${o.address}</span></div><div class="detailrow"><b>Total</b><strong>${money(o.total)}</strong></div>${currentRole==="owner"?`<div class="detailrow"><b>Delivery</b><span>${o.partnerUid?"Assigned to "+(o.partnerName||"delivery partner"):"Not assigned"}</span></div>`:""}</div><div class="mapbox"><div class="pin">📍</div><p><b>Delivery location</b><br>${o.address}<br><button class="soft" style="margin-top:8px;padding:7px 10px" onclick="navigateTo('${o.id}')">Go to ↗</button></p></div><div class="orderactions">${actions}</div></article>`;
@@ -349,15 +349,26 @@ async function assignPartner(id){
 }
 async function pickupOrder(id){
  const o=orders.find(x=>x.id===id);if(!o)return;
+ // Open the SMS composer directly from the tap, before awaiting Firestore.
+ // Mobile browsers may block sms: intents after an async operation.
+ messageCustomer(id);
  await changeStatus(id,"Out for Delivery");
- const message=`Namaste ${o.name}, aapka Tiffin Waala order ${o.id} delivery ke liye nikal chuka hai. Aapke address tak pahunchne ka samay route aur traffic ke hisaab se hoga. Dhanyavaad!`;
+}
+function messageCustomer(id){
+ const o=orders.find(x=>x.id===id);if(!o)return;
  const phone=(o.phone||"").replace(/[^0-9+]/g,"");
- if(phone && !phone.includes("X") && phone.length>=10){
-   window.location.href=`sms:${phone}?body=${encodeURIComponent(message)}`;
-   toast("Pickup mark ho gaya; customer SMS draft khul raha hai.");
- }else{
-   toast("Pickup status save ho gaya, lekin customer phone number available nahi hai.");
+ if(!phone || phone.includes("X") || phone.length<10){
+   toast("Customer ka valid mobile number available nahi hai.");
+   return;
  }
+ const message=`Namaste ${o.name}, aapka Tiffin Waala order ${o.id} delivery ke liye nikal chuka hai. Aapke address tak pahunchne ka samay route aur traffic ke hisaab se hoga. Dhanyavaad!`;
+ const link=document.createElement("a");
+ link.href=`sms:${phone}?body=${encodeURIComponent(message)}`;
+ link.style.display="none";
+ document.body.appendChild(link);
+ link.click();
+ link.remove();
+ toast("Customer ke liye SMS message khol rahe hain.");
 }
 function callCustomer(id){
  const o=orders.find(x=>x.id===id);if(!o)return;
